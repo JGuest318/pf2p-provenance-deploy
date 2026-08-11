@@ -1,0 +1,91 @@
+# PF2P_PROVENANCE — Phase 1 Docker Compose
+# Location on NAS (once transferred): /volume1/PF2P_PROVENANCE/deploy/docker-compose.yml
+# Directory layout expected alongside this file:
+#   ./app/api/       (Dockerfile, main.py, schema.sql, requirements.txt)
+#   ./app/gateway/    (Dockerfile, main.py, requirements.txt)
+#   ./.env            (see .env.example)
+#   ./secrets/api_keys.json
+#
+# Build the images locally on the NAS BEFORE first `up`:
+#   docker compose build
+# This produces pf2p/provenance-api:0.1.0 and pf2p/gateway:0.1.0 from the
+# Dockerfiles in this package — they are not pulled from any registry.
+
+services:
+  pf2p-provenance-api:
+    build:
+      context: ./app/api
+    image: pf2p/provenance-api:0.1.0
+    container_name: pf2p-provenance-api
+    restart: unless-stopped
+    user: "${PF2P_SVC_UID}:${PF2P_SVC_GID}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      - PF2P_ENV=production
+      - PF2P_DB_PATH=/data/db/pf2p_provenance.db
+      - PF2P_BIND_HOST=0.0.0.0
+      - PF2P_BIND_PORT=8420
+      - PF2P_LOG_LEVEL=info
+      - PF2P_API_KEYS_FILE=/secrets/api_keys.json
+    volumes:
+      - /volume1/PF2P_PROVENANCE/DATABASE:/data/db:rw
+      - /volume1/PF2P_PROVENANCE/ASSET_RECORDS:/data/asset_records:rw
+      - /volume1/PF2P_PROVENANCE/LEDGER_EXPORTS:/data/ledger_exports:rw
+      - /volume1/PF2P_PROVENANCE/deploy/secrets/api_keys.json:/secrets/api_keys.json:ro
+      - /volume1/Personal/Photos/RAW FILES:/archive_readonly/RAW_FILES:ro
+    networks:
+      - pf2p_backend
+    # No `ports:` — API belongs exclusively to pf2p_backend, unreachable
+    # from any host interface (Tailscale or LAN).
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8420/v1/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  pf2p-gateway:
+    build:
+      context: ./app/gateway
+    image: pf2p/gateway:0.1.0
+    container_name: pf2p-gateway
+    restart: unless-stopped
+    user: "${PF2P_SVC_UID}:${PF2P_SVC_GID}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      - PF2P_API_INTERNAL_URL=http://pf2p-provenance-api:8420
+      - PF2P_BIND_HOST=0.0.0.0
+      - PF2P_BIND_PORT=8421
+    networks:
+      - pf2p_backend
+      - pf2p_frontend
+    ports:
+      - "${TAILSCALE_IP}:8421:8421"
+    depends_on:
+      pf2p-provenance-api:
+        condition: service_healthy   # gateway won't start routing until the API reports healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8421/v1/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  pf2p_backend:
+    driver: bridge
+    internal: true      # API + gateway only; no route to the host network
+  pf2p_frontend:
+    driver: bridge       # standard bridge; carries only the gateway's published port
