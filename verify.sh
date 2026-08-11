@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 #
-# PF2P_PROVENANCE — Phase 1 verification script (v2)
+# PF2P_PROVENANCE — Phase 1 verification script (v3)
 #
 # Run this ON THE NAS, in the same directory as docker-compose.yml and .env,
 # AFTER `docker compose up -d` has already been run manually by a human.
 # This script does not start, stop, or modify the compose stack itself.
 #
-# Scope note: Tailscale reachability checks run FROM THE NAS ITSELF are a
+# v3 fixes vs v2:
+#   - Corrected a typo ("$VERIFY RESPONSE" -> "$VERIFY_RESPONSE") that broke
+#     Check 8b under `set -u`.
+#   - Switched all reachability checks from https:// to http://, matching
+#     the actual current deployment: the API and gateway containers serve
+#     plain HTTP (uvicorn, no TLS configured). Transport is still encrypted
+#     end-to-end by Tailscale's own WireGuard layer, but there is currently
+#    NO application-layer TLS on top of that. This is a known, tracked gap
+#    versus the original "HTTPS only, even over the private tunnel" design
+#    goal -- deferred intentionally for Phase 1 (test-only, no real asset
+#    data), to be added before Phase 2 real-asset registration work.
+#
+# Scope note: Tailscale reachability checks run FRoM THE NAS ITSELF are a
 # self-check only — they prove the gateway is bound and answering on its
 # Tailscale address, NOT that the iPad can reach it end-to-end. A separate
 # manual step (Check 3 below) is required to actually prove iPad access.
@@ -39,7 +51,8 @@ FIXTURE_CONTAINER_PATH="/archive_readonly/RAW_FILES/${FIXTURE_SUBDIR}/${FIXTURE_
 API_SERVICE="pf2p-provenance-api"
 GATEWAY_SERVICE="pf2p-gateway"
 
-: "${TAILSCALE_IP:?TAILSCALE_IP must be set — source your .env first (set -a; source .env; set +a)}"
+: "${TAILSCALE_IP:?TAILSCALE_IP must be set — source your .env first (
+set -a; source .env; set +a)}"
 
 LAN_IP="${PF2P_TEST_LAN_IP:-}"   # optional: run FROM ANOTHER LAN CLIENT with this set for Check 4 to be meaningful
 
@@ -88,7 +101,7 @@ mkdir -- "${RAW_HOST_DIR}/${FIXTURE_SUBDIR}" || {
 echo "disposable pf2p test fixture (run ${RUN_ID}) — safe to delete, not a real photograph" > "$FIXTURE_HOST_PATH" || {
   echo "ABORT: could not create disposable fixture file. No further checks run."
   exit 2
-}
+fi
 
 # ---- Check 1: Compose services healthy ----
 API_HEALTH=$(docker compose ps --format json "$API_SERVICE" 2>/dev/null | grep -o '"Health":"[a-z]*"' | head -1 | cut -d'"' -f4)
@@ -102,8 +115,8 @@ fi
 # ---- Check 2: NAS self-check — gateway reachable via its Tailscale binding ----
 # This proves the gateway is bound/listening on TAILSCALE_IP:8421 from the
 # NAS's own vantage point. It is NOT proof of end-to-end iPad reachability
-# (see Check 3, manual).
-if curl -sk --max-time 5 "https://${TAILSCALE_IP}:8421/v1/status" >/dev/null; then
+# (see Check 3, manual). Uses plain HTTP — see v3 header note re: TLS.
+if curl -s --max-time 5 "http://${TAILSCALE_IP}:8421/v1/status" >/dev/null; then
   record "Gateway reachable via Tailscale binding (NAS self-check only)" 0
 else
   record "Gateway reachable via Tailscale binding (NAS self-check only)" 1
@@ -112,16 +125,16 @@ fi
 # ---- Check 3: iPad reachability — MANUAL, not scriptable from the NAS ----
 echo
 echo "[MANUAL STEP REQUIRED] Check 3 — iPad / Tailscale end-to-end reachability:"
-echo "  On the iPad itself  (connected to Tailscale), open or curl:"
-echo "    https://${TAILSCALE_IP}:8421/v1/status"
+echo "  On the iPad itself (connected to Tailscale), open or curl:"
+echo "    http://${TAILSCALE_IP}:8421/v1/status"
 echo "  Confirm a response is received. This cannot be verified by this script"
 echo "  running on the NAS — it must be confirmed from the iPad."
-skip "iPad reachable over Tailscale  (confirm manually per instructions above)"
+skip "iPad reachable over Tailscale (confirm manually per instructions above)"
 echo
 
 # ---- Check 4: Gateway blocked over LAN IP (remote-client confirmation preferred) ----
 if [ -n "$LAN_IP" ]; then
-  if curl -sk --max-time 5 "https://${LAN_IP}:8421/v1/status" >/dev/null 2>&1; then
+  if curl -s --max-time 5 "http://${LAN_IP}:8421/v1/status" >/dev/null 2>&1; then
     record "Gateway blocked over LAN IP" 1   # reachable = FAIL, boundary violated
   else
     record "Gateway blocked over LAN IP" 0
@@ -137,9 +150,9 @@ fi
 # ---- Check 5: API not directly reachable (LAN or Tailscale) ----
 API_TS_REACHABLE=1
 API_LAN_REACHABLE=1
-curl -sk --max-time 5 "https://${TAILSCALE_IP}:8420/v1/status" >/dev/null 2>&1 && API_TS_REACHABLE=0
+curl -s --max-time 5 "http://${TAILSCALE_IP}:8420/v1/status" >/dev/null 2>&1 && API_TS_REACHABLE=0
 if [ -n "$LAN_IP" ]; then
-  curl -sk --max-time 5 "https://${LAN_IP}:8420/v1/status" >/dev/null 2>&1 && API_LAN_REACHABLE=0
+  curl -s --max-time 5 "http://${LAN_IP}:8420/v1/status" >/dev/null 2>&1 && API_LAN_REACHABLE=0
 fi
 if [ "$API_TS_REACHABLE" = "0" ] || [ "$API_LAN_REACHABLE" = "0" ]; then
   record "API not directly reachable (LAN or Tailscale)" 1
@@ -181,20 +194,15 @@ else
 fi
 
 # ---- Check 8b: API records a real SYSTEM_VERIFICATION transaction (retained) ----
-# NOTE: this calls a dedicated verification endpoint. It requires the API to
-# implement POST /v1/system/verify, which inserts an event with
-# event_type = 'SYSTEM_VERIFICATION', actor = 'system',
-# source_client = 'verify-script', approval_status = 'not_required'.
-# Add SYSTEM_VERIFICATION to the events.event_type CHECK constraint before
-# running this script if it is not already present in the schema.
-#
-# Unlike Check 8a, this event is NOT deleted afterward — it is a permanent,
+# Calls the dedicated verification endpoint over plain HTTP (
+see v3 header
+# note re: TLS). This event is NOT deleted afterward — it is a permanent,
 # append-only provenance record proving a successful verification run.
-VERIFY_RESPONSE=$(curl -sk --max-time 5 -X POST \
-  "https://${TAILSCALE_IP}:8421/v1/system/verify" \
+VERIFY_RESPONSE=$(curl -s --max-time 5 -X POST \
+  "http://${TAILSCALE_IP}:8421/v1/system/verify" \
   -H "Content-Type: application/json" \
   -d "{\"run_id\":\"${RUN_ID}\",\"source_client\":\"verify-script\"}")
-VERIFY_EVENT_ID=$(printf '%s' "$VERIFY RESPONSE" | grep -o '"event_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+VERIFY_EVENT_ID=$(printf '%s' "$VERIFY_RESPONSE" | grep -o '"event_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
 if [ -n "$VERIFY_EVENT_ID" ]; then
   record "API recorded SYSTEM_VERIFICATION event (event_id=${VERIFY_EVENT_ID}, retained)" 0
 else
