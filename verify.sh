@@ -100,7 +100,7 @@ mkdir -- "${RAW_HOST_DIR}/${FIXTURE_SUBDIR}" || {
 echo "disposable pf2p test fixture (run ${RUN_ID}) — safe to delete, not a real photograph" > "$FIXTURE_HOST_PATH" || {
   echo "ABORT: could not create disposable fixture file. No further checks run."
   exit 2
-fi
+}
 
 # ---- Check 1: Compose services healthy ----
 API_HEALTH=$(docker compose ps --format json "$API_SERVICE" 2>/dev/null | grep -o '"Health":"[a-z]*"' | head -1 | cut -d'"' -f4)
@@ -193,8 +193,7 @@ else
 fi
 
 # ---- Check 8b: API records a real SYSTEM_VERIFICATION transaction (retained) ----
-# Calls the dedicated verification endpoint over plain HTTP (
-see v3 header
+# Calls the dedicated verification endpoint over plain HTTP (see v3 header
 # note re: TLS). This event is NOT deleted afterward — it is a permanent,
 # append-only provenance record proving a successful verification run.
 VERIFY_RESPONSE=$(curl -s --max-time 5 -X POST \
