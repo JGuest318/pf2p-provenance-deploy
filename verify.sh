@@ -13,12 +13,12 @@
 #     the actual current deployment: the API and gateway containers serve
 #     plain HTTP (uvicorn, no TLS configured). Transport is still encrypted
 #     end-to-end by Tailscale's own WireGuard layer, but there is currently
-#    NO application-layer TLS on top of that. This is a known, tracked gap
-#    versus the original "HTTPS only, even over the private tunnel" design
-#    goal -- deferred intentionally for Phase 1 (test-only, no real asset
-#    data), to be added before Phase 2 real-asset registration work.
+#     NO application-layer TLS on top of that. This is a known, tracked gap
+#     versus the original "HTTPS only, even over the private tunnel" design
+#     goal -- deferred intentionally for Phase 1 (test-only, no real asset
+#     data), to be added before Phase 2 real-asset registration work.
 #
-# Scope note: Tailscale reachability checks run FRoM THE NAS ITSELF are a
+# Scope note: Tailscale reachability checks run FROM THE NAS ITSELF are a
 # self-check only — they prove the gateway is bound and answering on its
 # Tailscale address, NOT that the iPad can reach it end-to-end. A separate
 # manual step (Check 3 below) is required to actually prove iPad access.
@@ -51,8 +51,7 @@ FIXTURE_CONTAINER_PATH="/archive_readonly/RAW_FILES/${FIXTURE_SUBDIR}/${FIXTURE_
 API_SERVICE="pf2p-provenance-api"
 GATEWAY_SERVICE="pf2p-gateway"
 
-: "${TAILSCALE_IP:?TAILSCALE_IP must be set — source your .env first (
-set -a; source .env; set +a)}"
+: "${TAILSCALE_IP:?TAILSCALE_IP must be set — source your .env first (set -a; source .env; set +a)}"
 
 LAN_IP="${PF2P_TEST_LAN_IP:-}"   # optional: run FROM ANOTHER LAN CLIENT with this set for Check 4 to be meaningful
 
